@@ -7,7 +7,7 @@
  * @class 		woocommerce_CPS
  * @package		WooCommerce
  * @category	Payment Gateways
- * @author		Timothy Snowden (modified WooThemes Payfast plugin)
+ * @author		Timothy Snowden (based on Woo code)
  *
  *
  * Table Of Contents
@@ -18,14 +18,13 @@
  * plugin_url()
  * is_valid_for_use()
  * admin_options()
- * payment_fields()
  * generate_CPS_form()
  * process_payment()
  * receipt_page()
  * setup_constants()
  * log()
  * validate_ip()
- * amounts_equal()
+ * CPS_callback_handler()
  */
 class WC_Gateway_CPS extends WC_Payment_Gateway {
 
@@ -49,9 +48,7 @@ class WC_Gateway_CPS extends WC_Payment_Gateway {
 		$this->init_settings();
 
 		// Setup default merchant data.
-		$this->merchant_id = $this->settings['merchant_id'];
-		$this->merchant_key = $this->settings['merchant_key'];
-		$this->url = 'https://checkout.cornerstone.cc/';
+		$this->url = $this->settings['live_url'];
 		$this->title = $this->settings['title'];
 
 		// Setup the test data, if in test mode.
@@ -60,8 +57,6 @@ class WC_Gateway_CPS extends WC_Payment_Gateway {
 			$this->url = 'https://give.cornerstone.cc/The+Page+of+Infinite+Testing/checkout';
 		}
 
-		$this->response_url	= add_query_arg( 'wc-api', 'WC_Gateway_CPS', home_url( '/' ) );
-
 		/* 1.6.6 */
 		add_action( 'woocommerce_update_options_payment_gateways', array( $this, 'process_admin_options' ) );
 
@@ -69,12 +64,13 @@ class WC_Gateway_CPS extends WC_Payment_Gateway {
 		add_action( 'woocommerce_update_options_payment_gateways_' . $this->id, array( $this, 'process_admin_options' ) );
 
 		add_action( 'woocommerce_receipt_CPS', array( $this, 'receipt_page' ) );
-
+		add_action( 'woocommerce_api_wc_gateway_cps', array( $this, 'CPS_callback_handler' ) );
+        
 		// Check if the base currency supports this gateway.
 		if ( ! $this->is_valid_for_use() )
 			$this->enabled = false;
     }
-
+    
 	/**
      * Initialise Gateway Settings Form Fields
      *
@@ -102,23 +98,23 @@ class WC_Gateway_CPS extends WC_Payment_Gateway {
 											'description' => __( 'This controls the description which the user sees during checkout.', 'woothemes' ),
 											'default' => ''
 										),
+    						'live_url' => array(
+    										'title' => __( 'Live URL', 'woothemes' ),
+    										'type' => 'text',
+    										'description' => __( 'This is the payment gateway URL provided to you by Cornerstone.', 'woothemes' ),
+    										'default' => 'https://give.cornerstone.cc/The+Page+of+Infinite+Testing/checkout'
+    									),
+    						'sandbox_url' => array(
+    										'title' => __( 'Sandbox URL', 'woothemes' ),
+    										'type' => 'text',
+    										'description' => __( 'This is the sandbox payment gateway URL provided to you by Cornerstone for testing.', 'woothemes' ),
+    										'default' => 'https://give.cornerstone.cc/The+Page+of+Infinite+Testing/checkout'
+    									),
 							'testmode' => array(
 											'title' => __( 'CPS Solidstone Sandbox', 'woothemes' ),
 											'type' => 'checkbox',
 											'description' => __( 'Place the payment gateway in development mode.', 'woothemes' ),
 											'default' => 'yes'
-										),
-							'merchant_id' => array(
-											'title' => __( 'Merchant ID', 'woothemes' ),
-											'type' => 'text',
-											'description' => __( 'This is the merchant ID assigned to you by Cornerstone.', 'woothemes' ),
-											'default' => ''
-										),
-							'merchant_key' => array(
-											'title' => __( 'Merchant Key', 'woothemes' ),
-											'type' => 'text',
-											'description' => __( 'This is the merchant key assigned to you by Cornerstone.', 'woothemes' ),
-											'default' => ''
 										),
 							'send_debug_email' => array(
 											'title' => __( 'Send Debug Emails', 'woothemes' ),
@@ -141,16 +137,17 @@ class WC_Gateway_CPS extends WC_Payment_Gateway {
      *
      * Add a notice to the merchant_key and merchant_id fields when in test mode.
      *
+     * @author Woo & Timothy Snowden
      * @since 1.0.0
      */
     function add_testmode_admin_settings_notice () {
-    	$this->form_fields['merchant_id']['description'] .= ' <strong>' . __( 'CPS Sandbox Merchant ID currently in use.', 'woothemes' ) . ' ( 10000100 )</strong>';
-    	$this->form_fields['merchant_key']['description'] .= ' <strong>' . __( 'CPS Sandbox Merchant Key currently in use.', 'woothemes' ) . ' ( 46f0cd694581a )</strong>';
+    	$this->form_fields['title']['description'] .= ' <strong>' . __( 'CPS currently in test mode.', 'woothemes' ) . '</strong>';
     } // End add_testmode_admin_settings_notice()
 
     /**
 	 * Get the plugin URL
 	 *
+     * @author Woo
 	 * @since 1.0.0
 	 */
 	function plugin_url() {
@@ -170,6 +167,7 @@ class WC_Gateway_CPS extends WC_Payment_Gateway {
      * Check if this gateway is enabled and available in the base currency being traded with.
      *
      * @since 1.0.0
+     * @author Woo
      */
 	function is_valid_for_use() {
 		global $woocommerce;
@@ -191,6 +189,7 @@ class WC_Gateway_CPS extends WC_Payment_Gateway {
 	 * - Options for bits like 'title' and availability on a country-by-country basis
 	 *
 	 * @since 1.0.0
+     * @author Woo & Timothy Snowden
 	 */
 	public function admin_options() {
 		// Make sure to empty the log file if not in test mode.
@@ -218,21 +217,11 @@ class WC_Gateway_CPS extends WC_Payment_Gateway {
     	<?php
     } // End admin_options()
 
-    /**
-	 * There are no payment fields for PayFast, but we want to show the description if set.
-	 *
-	 * @since 1.0.0
-	 */
-    function payment_fields() {
-    	if ( isset( $this->settings['description'] ) && ( '' != $this->settings['description'] ) ) {
-    		echo wpautop( wptexturize( $this->settings['description'] ) );
-    	}
-    } // End payment_fields()
-
 	/**
 	 * Generate the CPS button link.
 	 *
 	 * @since 1.0.0
+     * @author Woo & Timothy Snowden
 	 */
     public function generate_CPS_form( $order_id ) {
 
@@ -247,7 +236,7 @@ class WC_Gateway_CPS extends WC_Payment_Gateway {
 	        // Merchant details
 	        'merchant_id' => $this->settings['merchant_id'],
 	        'merchant_key' => $this->settings['merchant_key'],
-	        'callback' => $this->get_return_url( $order ),
+	        'callback' => str_replace( 'https:', 'http:', add_query_arg( 'orderid', $order_id, add_query_arg( 'wc-api', 'WC_Gateway_CPS', home_url( '/' ) ) ) ),
 
 	        // Item details
 	        'memo[Order No. ]' => $order->get_order_number(),
@@ -301,6 +290,7 @@ class WC_Gateway_CPS extends WC_Payment_Gateway {
 	/**
 	 * Process the payment and return the result.
 	 *
+     * @author Woo
 	 * @since 1.0.0
 	 */
 	function process_payment( $order_id ) {
@@ -319,6 +309,7 @@ class WC_Gateway_CPS extends WC_Payment_Gateway {
 	 *
 	 * Display text and a button to direct the user to Cornerstone.
 	 *
+     * @author Woo
 	 * @since 1.0.0
 	 */
 	function receipt_page( $order ) {
@@ -326,12 +317,13 @@ class WC_Gateway_CPS extends WC_Payment_Gateway {
 
 		echo $this->generate_CPS_form( $order );
 	} // End receipt_page()
-
+    
 	/**
 	 * Setup constants.
 	 *
 	 * Setup common values and messages used by the CPS gateway.
 	 *
+     * @author Woo
 	 * @since 1.0.0
 	 */
 	function setup_constants () {
@@ -371,9 +363,9 @@ class WC_Gateway_CPS extends WC_Payment_Gateway {
 	 *
 	 * Log system processes.
 	 *
+     * @author Woo
 	 * @since 1.0.0
 	 */
-
 	function log ( $message, $close = false ) {
 		if ( ( $this->settings['testmode'] != 'yes' && ! is_admin() ) ) { return; }
 
@@ -404,9 +396,9 @@ class WC_Gateway_CPS extends WC_Payment_Gateway {
 	 * Validate the IP address to make sure it's coming from CPS.
 	 *
 	 * @param array $data
+     * @author Woo
 	 * @since 1.0.0
 	 */
-
 	function validate_ip( $sourceIP ) {
 	    // Variable initialization
 	    $validHosts = array(
@@ -435,26 +427,54 @@ class WC_Gateway_CPS extends WC_Payment_Gateway {
 	    }
 	} // End validate_ip()
 
-	/**
-	 * amounts_equal()
+    /**
+	 * CPS_callback_handler()
 	 *
-	 * Checks to see whether the given amounts are equal using a proper floating
-	 * point comparison with an Epsilon which ensures that insignificant decimal
-	 * places are ignored in the comparison.
+	 * Checks the callback URL from the CPS payment system and
+     * marks the order accordingly. It also notifies the user accordingly.
 	 *
-	 * eg. 100.00 is equal to 100.0001
-	 *
-	 * @author Jonathan Smit
-	 * @param $amount1 Float 1st amount for comparison
-	 * @param $amount2 Float 2nd amount for comparison
-	 * @since 1.0.0
+	 * @author Timothy Snowden (modified from Woo Paypal code?)
+     * @since 1.0.0
 	 */
-	function amounts_equal ( $amount1, $amount2 ) {
-		if( abs( floatval( $amount1 ) - floatval( $amount2 ) ) > CPS_EPSILON ) {
-			return( false );
-		} else {
-			return( true );
-		}
-	} // End amounts_equal()
+    function CPS_callback_handler() {
+        
+        $order_id = preg_replace("/[^0-9]/", "", $_GET['orderid']);
+        $order = new WC_Order($order_id);
+        $order_status = preg_replace("/[^a-zA-Z0-9\s]/", "", $_GET['status']);
+        $status_msg = preg_replace("/[^a-zA-Z0-9\s]/", "", $_GET['message']);
+
+        if ( isset($order_status) ) {
+            switch ( strtolower( $order_status ) ) {
+                case 'approved' :
+                    // Payment completed
+                    $order->add_order_note( __( 'Payment completed via CPS.', 'woothemes' ) );
+                    $order->payment_complete();
+
+                    //Redirect to WC page
+                    wp_redirect( $this->get_return_url( $order ), 303 );
+                break;
+                
+                case 'declined' :
+                    // Failed order
+                    $order->update_status( 'failed', sprintf(__('Payment %s via CPS. Message: %s.', 'woothemes' ), $order_status, $status_msg ) );
+                    
+                    //Redirect to WC page
+                    wp_redirect( $this->get_return_url( $order ), 303 );
+                    break;
+                
+                default:
+                    // Hold order
+                    $order->update_status( 'on-hold', sprintf(__('Payment %s via CPS.', 'woothemes' ), $order_status ) );
+                    
+                    // Redirect to WC page
+                    wp_redirect( $this->get_return_url( $order ), 303 );
+                    break;
+            } // End SWITCH Statement
+
+        } // End IF Statement
+
+        exit;
+    }
+// End CPS_callback_handler()    
 
 } // End Class
